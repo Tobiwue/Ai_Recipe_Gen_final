@@ -1,0 +1,44 @@
+import os
+
+base_dir = "BASE_DIR"
+
+train_images_dir = os.path.join(base_dir, "train/images")
+val_images_dir = os.path.join(base_dir, "val/images")
+
+def get_classes_from_labels(annotation_dir):
+    classes = set()
+    for root, dirs, files in os.walk(annotation_dir):
+        for file in files:
+            if file.endswith(".txt"):
+                with open(os.path.join(root, file), "r") as f:
+                    for line in f:
+                        class_id = line.split()[0]
+                        classes.add(int(class_id))
+    return sorted(list(classes))
+
+annotations_dir = os.path.join(base_dir, "annotations")
+classes = get_classes_from_labels(annotations_dir)
+
+# input all class name istead of the place holder
+class_names = [
+    "CLASS_NAME_1",
+    "CLASS_NAME_2",
+    "...",
+]
+
+if len(classes) != len(class_names):
+    raise ValueError("Die Anzahl der gefundenen Klassen stimmt nicht mit den bereitgestellten Klassennamen überein!")
+
+yaml_content = f"""
+train: {train_images_dir.replace("\\", "/")}
+val: {val_images_dir.replace("\\", "/")}
+
+nc: {len(class_names)}
+names: {class_names}
+"""
+
+yaml_path = os.path.join(base_dir, "dataset.yaml")
+with open(yaml_path, "w") as yaml_file:
+    yaml_file.write(yaml_content)
+
+print(f"dataset.yaml wurde erstellt: {yaml_path}")
