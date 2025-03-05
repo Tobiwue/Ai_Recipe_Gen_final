@@ -1,0 +1,83 @@
+import os
+import shutil
+from sklearn.model_selection import train_test_split
+
+
+base_dir = "BASE_DIR"
+image_dir = os.path.join(base_dir, "images")
+annotation_dir = os.path.join(base_dir, "annotations")
+
+train_images_dir = os.path.join(base_dir, "train/images")
+train_labels_dir = os.path.join(base_dir, "train/labels")
+val_images_dir = os.path.join(base_dir, "val/images")
+val_labels_dir = os.path.join(base_dir, "val/labels")
+
+
+os.makedirs(train_images_dir, exist_ok=True)
+os.makedirs(train_labels_dir, exist_ok=True)
+os.makedirs(val_images_dir, exist_ok=True)
+os.makedirs(val_labels_dir, exist_ok=True)
+
+images = []
+for root, dirs, files in os.walk(image_dir):
+    for file in files:
+        if file.endswith((".jpg", ".jpeg", ".png")):
+            images.append(os.path.join(root, file))
+
+annotations = []
+for root, dirs, files in os.walk(annotation_dir):
+    for file in files:
+        if file.endswith(".txt"):
+            annotations.append(os.path.join(root, file))
+
+assert len(images) == len(annotations), "Anzahl der Bilder und Annotationen stimmt nicht überein!"
+
+#80/20
+train_images, val_images = train_test_split(images, test_size=0.2, random_state=42)
+
+####
+for image_file in train_images:
+    target_image_path = os.path.join(train_images_dir, os.path.basename(image_file))
+    annotation_file = os.path.splitext(image_file)[0] + ".txt"
+    annotation_file_name = os.path.basename(annotation_file)
+    annotation_file_path = os.path.join(annotation_dir, annotation_file_name)
+    
+    target_label_path = os.path.join(train_labels_dir, os.path.basename(annotation_file))
+    os.makedirs(os.path.dirname(target_image_path), exist_ok=True)
+    os.makedirs(os.path.dirname(target_label_path), exist_ok=True)
+
+    if not os.path.exists(target_image_path):
+        shutil.copy(image_file, target_image_path)
+        print(f"Bild kopiert: {image_file} -> {target_image_path}")
+    
+    if os.path.exists(annotation_file_path):  # Überprüfen, ob die Annotation existiert
+        if not os.path.exists(target_label_path):
+            shutil.copy(annotation_file_path, target_label_path)
+            print(f"Annotation kopiert: {annotation_file_path} -> {target_label_path}")
+    else:
+        print(f"Annotation für {image_file} nicht gefunden!")
+
+####
+for image_file in val_images:
+    target_image_path = os.path.join(val_images_dir, os.path.basename(image_file))
+    
+    annotation_file = os.path.splitext(image_file)[0] + ".txt"
+    annotation_file_name = os.path.basename(annotation_file)  # Nur der Dateiname der Annotation
+    annotation_file_path = os.path.join(annotation_dir, annotation_file_name)
+    
+    target_label_path = os.path.join(val_labels_dir, os.path.basename(annotation_file))  # Zielpfad für die Annotation
+    os.makedirs(os.path.dirname(target_image_path), exist_ok=True)
+    os.makedirs(os.path.dirname(target_label_path), exist_ok=True)
+
+    if not os.path.exists(target_image_path):
+        shutil.copy(image_file, target_image_path)
+        print(f"Bild kopiert: {image_file} -> {target_image_path}")
+    
+    if os.path.exists(annotation_file_path):  # Überprüfen, ob die Annotation existiert
+        if not os.path.exists(target_label_path):
+            shutil.copy(annotation_file_path, target_label_path)
+            print(f"Annotation kopiert: {annotation_file_path} -> {target_label_path}")
+    else:
+        print(f"Annotation für {image_file} nicht gefunden!")
+
+print("Datenaufteilung abgeschlossen!")
