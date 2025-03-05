@@ -1,0 +1,27 @@
+from ultralytics import YOLO
+import openai
+
+model = YOLO('MODEL.pt')
+image_path = 'PICTURE.JPG'
+results = model(image_path)
+
+recognized_classes = []
+for result in results:
+    for box in result.boxes:
+        class_id = int(box.cls[0])
+        confidence = float(box.conf[0])
+        recognized_classes.append(model.names[class_id])
+        print(f'Erkannte Klasse: {model.names[class_id]}, Konfidenz: {confidence:.2f}')
+
+client = openai.OpenAI(API_KEY)
+#prompt = f"Erstelle ein Rezept basierend auf der Mahlzeit: {', '.join(recognized_classes)}."
+prompt = f"Erstelle ein x Rezept für {', '.join(recognized_classes)}."
+
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "system", "content": "Du bist ein Chefkoch, der leckere Rezepte generiert."},
+              {"role": "user", "content": prompt}]
+)
+
+print("\nGeneriertes Rezept:")
+print(response.choices[0].message.content)
