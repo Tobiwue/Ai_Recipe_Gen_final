@@ -1,0 +1,200 @@
+import tkinter as tk
+from tkinter import filedialog
+from tkinter.scrolledtext import ScrolledText
+from PIL import Image, ImageTk
+from ultralytics import YOLO
+import llama_cpp
+from rouge_score import rouge_scorer
+from nltk.tokenize import word_tokenize
+from fpdf import FPDF
+from transformers import BertTokenizer, BertModel
+import torch
+import re
+
+DEFAULT_PROMPT = "Erstelle ein Rezept für {classification}."
+
+def compute_bertscore(reference, candidate):
+    tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+    model = BertModel.from_pretrained("bert-base-uncased")
+    
+    ref_tokens = tokenizer(reference, return_tensors="pt", padding=True, truncation=True)
+    cand_tokens = tokenizer(candidate, return_tensors="pt", padding=True, truncation=True)
+    
+    with torch.no_grad():
+        ref_emb = model(**ref_tokens).last_hidden_state.mean(dim=1)
+        cand_emb = model(**cand_tokens).last_hidden_state.mean(dim=1)
+    
+    similarity = torch.cosine_similarity(ref_emb, cand_emb)
+    return similarity.item()
+
+class App:
+    def __init__(self, master):
+        self.master = master
+        master.title("Bildklassifizierung")
+        btn_width = 25
+
+        self.left_frame = tk.Frame(master)
+        self.left_frame.pack(side=tk.LEFT, padx=10, pady=10, fill=tk.BOTH, expand=True)
+        
+        self.right_frame = tk.Frame(master)
+        self.right_frame.pack(side=tk.RIGHT, padx=10, pady=10, fill=tk.BOTH, expand=True)
+        self.right_frame.grid_columnconfigure(0, minsize=150)
+        self.right_frame.grid_columnconfigure(1, weight=1)
+        self.right_frame.grid_rowconfigure(0, weight=1)
+
+        self.btn_upload = tk.Button(self.left_frame, text="Bild hochladen", width=btn_width, command=self.upload_image)
+        self.btn_upload.pack(pady=5, fill='x', anchor='w')
+        self.btn_load_ref = tk.Button(self.left_frame, text="Referenzrezept laden", width=btn_width, command=self.load_reference_recipe)
+        self.btn_load_ref.pack(pady=5, fill='x', anchor='w')
+        self.btn_customize_prompt = tk.Button(self.left_frame, text="Prompt anpassen", width=btn_width, command=self.customize_prompt)
+        self.btn_customize_prompt.pack(pady=5, fill='x', anchor='w')
+        self.btn_classify = tk.Button(self.left_frame, text="Klassifizieren", width=btn_width, command=self.classify_image)
+        self.btn_classify.pack(pady=5, fill='x', anchor='w')
+        self.btn_generate = tk.Button(self.left_frame, text="Rezept generieren", width=btn_width, command=self.generate_recipe)
+        self.btn_generate.pack(pady=5, fill='x', anchor='w')
+        self.btn_download = tk.Button(self.left_frame, text="Download PDF", width=btn_width, command=self.download_pdf)
+        self.btn_download.pack(pady=5, fill='x', anchor='w')
+
+        self.image_label = tk.Label(self.left_frame)
+        self.image_label.pack(pady=10)
+        self.result_label = tk.Label(self.left_frame, justify=tk.LEFT)
+        self.result_label.pack(pady=10)
+
+        self.scores_label = tk.Label(self.right_frame, text="", anchor='nw', justify=tk.LEFT)
+        self.scores_label.grid(row=0, column=0, sticky="nsew", padx=(10,5), pady=10)
+        self.recipe_frame = tk.Frame(self.right_frame)
+        self.recipe_frame.grid(row=0, column=1, sticky="nsew", padx=(5,10), pady=10)
+        self.recipe_frame.grid_rowconfigure(1, weight=1)
+        self.recipe_frame.grid_columnconfigure(0, weight=1)
+        self.prompt_label = tk.Label(self.recipe_frame, text="", anchor='w', justify=tk.LEFT)
+        self.prompt_label.grid(row=0, column=0, sticky="w", pady=(0,5))
+        self.recipe_text = ScrolledText(self.recipe_frame, wrap=tk.WORD)
+        self.recipe_text.grid(row=1, column=0, sticky="nsew")
+
+        self.current_image_path = None
+        self.model = YOLO('best.pt')
+        self.reference_rezept = None
+        self.custom_prompt = ""
+        self.classification = None
+        self.confidence = None
+
+        self.update_prompt_label(self.classification)
+
+    def update_prompt_label(self, classification=None):
+        template = self.custom_prompt if self.custom_prompt else DEFAULT_PROMPT
+        if classification is None:
+            prompt_display = template.replace("{classification}", "<Klassifizierung>")
+        else:
+            prompt_display = template.format(classification=classification)
+        self.prompt_label.config(text=f"Verwendeter Prompt: {prompt_display}")
+
+    def upload_image(self):
+        file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.jpg *.jpeg *.png *.bmp")])
+        if not file_path:
+            return
+        self.current_image_path = file_path
+        image = Image.open(file_path)
+        image.thumbnail((400, 400))
+        photo = ImageTk.PhotoImage(image)
+        self.image_label.config(image=photo)
+        self.image_label.image = photo
+        self.result_label.config(text="Bild erfolgreich hochgeladen!")
+
+    def load_reference_recipe(self):
+        file_path = filedialog.askopenfilename(filetypes=[("Text files", "*.txt")])
+        if not file_path:
+            return
+        try:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                self.reference_rezept = file.read()
+            self.result_label.config(text="Referenzrezept erfolgreich geladen!")
+            self.btn_load_ref.config(text="Referenzrezept geladen ✔")
+        except Exception as e:
+            self.result_label.config(text=f"Fehler beim Laden: {e}")
+
+    def customize_prompt(self):
+        prompt_window = tk.Toplevel(self.master)
+        prompt_window.title("Prompt anpassen")
+        prompt_window.geometry("400x200")
+        label = tk.Label(prompt_window, text="Gib hier den zusätzlichen Prompt-Text ein:")
+        label.pack(pady=5)
+        prompt_text = tk.Text(prompt_window, height=5, wrap=tk.WORD)
+        prompt_text.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
+        prompt_text.insert(tk.END, self.custom_prompt if self.custom_prompt else DEFAULT_PROMPT)
+        def save_prompt():
+            user_input = prompt_text.get(1.0, tk.END).strip()
+            self.custom_prompt = "" if user_input == DEFAULT_PROMPT else user_input
+            prompt_window.destroy()
+            self.result_label.config(text="Prompt aktualisiert!")
+            self.update_prompt_label(self.classification)
+        save_button = tk.Button(prompt_window, text="Speichern", width=20, command=save_prompt)
+        save_button.pack(pady=5)
+
+    def classify_image(self):
+        if not self.current_image_path:
+            self.result_label.config(text="Bitte zuerst ein Bild hochladen!")
+            return
+        results = self.model(self.current_image_path)
+        boxes = results[0].boxes
+        if len(boxes) == 0:
+            self.classification = "Keine Klassifizierung gefunden"
+            self.confidence = None
+        else:
+            self.classification = self.model.names[int(boxes.cls[0])]
+            self.confidence = float(boxes.conf[0])
+        self.update_prompt_label(self.classification)
+        conf_text = f"Confidence: {self.confidence:.4f}" if self.confidence is not None else "Confidence: N/A"
+        self.scores_label.config(text=conf_text)
+        self.result_label.config(text=f"Klassifizierung: {self.classification}")
+
+    def generate_recipe(self):
+        if not self.classification or not self.reference_rezept:
+            self.result_label.config(text="Bitte klassifizieren und Referenzrezept laden!")
+            return
+        llm = llama_cpp.Llama(
+            model_path="/opt/models/DeepSeek-R1-GGUF/DeepSeek-R1-UD-IQ1_S/DeepSeek-R1-UD-IQ1_S-00001-of-00003.gguf",
+            n_gpu_layers=2, n_ctx=8192, verbose=False, n_threads=24, ggml_type=llama_cpp.GGML_TYPE_Q4_0
+        )
+        prompt = (self.custom_prompt if self.custom_prompt else DEFAULT_PROMPT).format(classification=self.classification)
+        if "Deutsch" not in prompt:
+            prompt += "\n\nAntworte ausschließlich in deutscher Sprache."
+        messages = [{"role": "user", "content": prompt}]
+        response = llm.create_chat_completion(messages=messages, stream=True)
+        full_response = "".join(chunk['choices'][0]['delta']['content'] for chunk in response if 'content' in chunk['choices'][0]['delta'])
+        self.recipe_text.delete(1.0, tk.END)
+        self.recipe_text.insert(tk.END, full_response)
+        full_response = re.sub(r"<think>.*?</think>", "", full_response, flags=re.DOTALL).strip()
+        scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'])
+        rouge_scores = scorer.score(self.reference_rezept, full_response)
+        bert_score = compute_bertscore(self.reference_rezept, full_response)
+        scores_text = (f"ROUGE-1: {rouge_scores['rouge1'].fmeasure:.4f}\n"
+                       f"ROUGE-2: {rouge_scores['rouge2'].fmeasure:.4f}\n"
+                       f"ROUGE-L: {rouge_scores['rougeL'].fmeasure:.4f}\n"
+                       f"BERTScore: {bert_score:.4f}")
+        self.scores_label.config(text=scores_text)
+        self.result_label.config(text="Rezept generiert!")
+
+    def download_pdf(self):
+        recipe = self.recipe_text.get("1.0", tk.END).strip()
+        if not recipe:
+            self.result_label.config(text="Kein Rezept vorhanden!")
+            return
+        recipe = recipe.encode('latin-1', 'replace').decode('latin-1')
+        file_path = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF files", "*.pdf")])
+        if not file_path:
+            return
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", size=12)
+        for line in recipe.split('\n'):
+            pdf.multi_cell(0, 10, line)
+        try:
+            pdf.output(file_path)
+            self.result_label.config(text="PDF erfolgreich heruntergeladen!")
+        except Exception as e:
+            self.result_label.config(text=f"Fehler beim Speichern: {e}")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = App(root)
+    root.mainloop()
